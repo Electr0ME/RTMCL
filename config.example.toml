@@ -1,0 +1,24 @@
+schema_version = 1
+
+[downloads]
+# ordered 按 sources 顺序选择；strict 必须只指定一个来源。
+# 这是当前工程默认值，首版产品默认来源仍待确定。P0 CLI 使用同一策略。
+mode = "ordered"
+sources = ["official", "bmclapi"]
+max_concurrent_per_host = 8
+retries_per_source = 2
+
+[mirrors.bmclapi]
+base_url = "https://bmclapi2.bangbang93.com"
+
+[launch]
+min_memory_mib = 512
+max_memory_mib = 2048
+jvm_args = []
+window_width = 854
+window_height = 480
+
+[launch.java]
+kind = "automatic"
+# 手动 Java 改为 kind = "executable" 并填写绝对路径：
+# path = 'C:\Program Files\Java\bin\java.exe'

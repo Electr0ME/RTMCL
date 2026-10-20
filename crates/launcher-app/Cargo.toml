@@ -1,0 +1,37 @@
+[package]
+name = "launcher-app"
+description = "Application services and domain ports for RTMCL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lighty-launcher.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hex.workspace = true
+futures-util.workspace = true
+async-trait.workspace = true
+directories.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
+
+[lints]
+workspace = true

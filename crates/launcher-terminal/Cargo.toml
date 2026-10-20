@@ -1,0 +1,30 @@
+[package]
+name = "launcher-terminal"
+description = "Shared CLI and TUI entry point for RTMCL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rtmcl"
+path = "src/main.rs"
+
+[dependencies]
+launcher-app.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+futures-util.workspace = true
+ratatui.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+* text=auto
+
+# Project sources use LF on every platform.
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=lf
+Cargo.lock text eol=lf
+LICENSE text eol=lf
+
+# Preserve the audited upstream snapshot byte-for-byte.
+vendor/lighty/** -text -whitespace
+*.png binary
