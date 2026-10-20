@@ -31,7 +31,12 @@ impl AppPaths {
                 logs: root.join("logs"),
             });
         }
-        let dirs = ProjectDirs::from("", "", "rtmcl").ok_or(AppError::MissingDataDirectory)?;
+        let name = if crate::accounts::DEVELOPMENT_LOCAL_ACCOUNTS {
+            "rtmcl-development"
+        } else {
+            "rtmcl"
+        };
+        let dirs = ProjectDirs::from("", "", name).ok_or(AppError::MissingDataDirectory)?;
         Ok(Self {
             config: dirs.config_dir().to_owned(),
             instances: dirs.data_local_dir().join("instances"),

@@ -1,116 +1,67 @@
 # RTMCL
 
-A Rust CLI/TUI launcher prototype for Minecraft: Java Edition, built on
-LightyLauncherLib. The project targets Windows x64 and Linux x64; current local
-acceptance work focuses on Windows.
+**Rust TUI Minecraft Launcher** is an independent, open-source launcher for
+Minecraft: Java Edition, built with Rust and LightyLauncherLib.
 
-[中文说明](README.zh-CN.md) · [Documentation](docs/README.md) ·
-[Application review status](docs/app-review-status.md)
+[中文说明](README.zh-CN.md)
 
-## Project status
+RTMCL aims to provide a terminal interface for managing game instances, accounts,
+Java runtimes, downloads, and game processes. Target platforms are Windows x64
+and Linux x64; current local validation focuses on Windows.
 
-RTMCL is an early P0 development snapshot, not a production release. The CLI
-implements the current install and launch workflow; the TUI is a minimal shell.
-Full account, task, settings, and log pages are planned.
+## Current capabilities
 
-- Earlier Vanilla 1.21.1 and Fabric Loader 0.16.10 smoke tests reached the game
-  menu using a development login mode that has now been removed. Those screenshots
-  do not validate the current Microsoft-only launch path.
-- Windows has 36 automated tests covering accounts, downloads, installation,
-  storage, process supervision, and CLI/TUI behavior.
-- WSL / WSLg acceptance is temporarily suspended. Ubuntu CI remains configured;
-  historical Linux checks are not a guarantee for later changes.
-- Microsoft Device Code authorization, Xbox Live, and XSTS passed a real Windows
-  check. Minecraft Services token exchange returned HTTP 403. API access review
-  and end-to-end Microsoft account acceptance remain outstanding.
-- Launch now requires a Microsoft account and successful online authentication.
-  The local test login, offline identity generator, and offline launch option
-  have been removed; old local test records cannot be selected.
+- Isolated Vanilla and Fabric instances, installation, and game launch.
+- Official and BMCLAPI download sources, ordered fallback, resumable downloads,
+  and size/hash verification.
+- Java detection and selection, plus managed runtime installation.
+- Independent game process supervision and per-session game logs.
+- A working CLI and a minimal TUI instance browser.
 
-See the [validation record](docs/p0-validation.zh-CN.md) for evidence and limits,
-including the outstanding clean-cache mirror-only installation test.
+## Development status
 
-## Implemented
+The project is an early development prototype. P0 installation and launch
+infrastructure is implemented, and P1 application services and CLI work are in
+progress. The complete TUI and packaged releases are planned.
 
-- Isolated Vanilla and Fabric instances with persisted configuration.
-- Official and BMCLAPI source routing, strict source selection, ordered fallback,
-  resumable downloads, size/hash verification, and atomic file commits.
-- Explicit Java executables, real version/architecture detection, and managed
-  Adoptium runtimes verified with SHA-256.
-- Separate launcher and game logs, instance operation locks, and an independent
-  supervisor that lets the game keep running when the interactive CLI exits.
-- Microsoft Device Code integration with system credential storage code and an
-  explicit session-only fallback; real persistence/refresh acceptance is pending.
+Windows development-account launches have been verified. Microsoft authorization,
+Xbox Live, and XSTS succeeded in a real check, but Minecraft Services token
+exchange returned HTTP 403. Minecraft API access and full authenticated gameplay,
+ownership, and credential refresh acceptance remain pending. This project does
+not claim Microsoft or Mojang approval.
 
-## Build and try
+Clean-cache installation through real mirrors with official endpoints unavailable
+also remains unverified. New WSL/WSLg acceptance checks are temporarily suspended;
+Windows and Ubuntu CI are configured.
 
-The repository pins **Rust 1.98.0**. Install the platform C/C++ build tools as
-well. Game files and Java archives are downloaded separately and are not included
-in this repository.
+## Accounts
 
-```sh
-cargo build --workspace --locked
-cargo run --locked -- doctor
-cargo run --locked -- --data-dir .rtmcl/demo config init
-cargo run --locked -- --data-dir .rtmcl/demo instance create "Vanilla test" --game-version 1.21.1
-cargo run --locked -- --data-dir .rtmcl/demo instance list
-```
+Normal builds require a bound Microsoft account with freshly checked Java
+ownership and play entitlements when creating or launching a local profile.
+Removing the owner or failing authentication blocks access. Local profiles do
+not provide an authenticated Microsoft multiplayer session.
 
-Use the instance UUID returned by the create command:
+An explicit `dev-local-accounts` feature permits unbound profiles for local debug
+development. It is off by default, rejected by standard release builds, and its
+development-only profiles cannot be used by normal binaries. This exception is
+part of the disclosed source behavior and does not imply API approval.
 
-```sh
-cargo run --locked -- --data-dir .rtmcl/demo p0 --source mirror-first install <INSTANCE_ID>
-cargo run --locked -- --data-dir .rtmcl/demo account login --client-id <CLIENT_ID>
-cargo run --locked -- --data-dir .rtmcl/demo account list
-cargo run --locked -- --data-dir .rtmcl/demo p0 launch <INSTANCE_ID> --account <ACCOUNT_ID>
-```
+## Build requirements
 
-The launch commands require successful Microsoft/Minecraft authentication;
-they cannot complete while the current Minecraft Services HTTP 403 remains.
-Authentication uses this project's own Client ID, supplied through `--client-id`
-or `RTMCL_MICROSOFT_CLIENT_ID`; it does not require a redirect URI. See
-[Microsoft login setup](docs/microsoft-login.zh-CN.md) and
-[review status](docs/app-review-status.md).
+The project pins Rust **1.98.0** and LightyLauncherLib **26.9.3**. Building requires
+the platform C/C++ toolchain. Run `cargo build --workspace --locked` to build and
+`cargo run --locked -- --help` for the CLI. Settings are illustrated in
+[config.example.toml](config.example.toml).
 
-Configure downloads, memory, Java, and the game window with
-[config.example.toml](config.example.toml). Pass `--java /absolute/path/to/java`
-to select Java explicitly, or `--wait` to wait for the game to exit. Run without a
-subcommand to open the minimal TUI; interactive controls are WASD / arrow keys,
-Enter / Space, and Esc.
+Minecraft files, Java archives, account credentials, and local development
+records are excluded from this source repository.
 
-## Repository layout
+## License
 
-```text
-crates/launcher-app/        Application services, domain types, and integration tests
-crates/launcher-terminal/   CLI, minimal TUI, and process worker entry point
-docs/                      Architecture, roadmap, validation, and screenshots
-scripts/                   Upstream release auditing tools
-vendor/lighty/             Fixed, audited Lighty snapshot and documented patches
-config.example.toml        Example application configuration
-```
+RTMCL's own code is licensed under the [MIT License](LICENSE). Lighty retains
+its separate license and copyright notice; see
+[third-party notices](THIRD_PARTY_NOTICES.md) and the
+[local patch boundary](vendor/lighty/RTMCL-PATCHES.md).
 
-Local build outputs and runtime data belong in `target/` and `.rtmcl/`; both are
-excluded from Git. No account files, credentials, game archives, or raw runtime
-logs are part of the source repository.
-
-## Development
-
-```sh
-cargo fmt --package launcher-app --package launcher-terminal -- --check
-cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
-cargo test --workspace --locked
-cargo build --workspace --locked
-```
-
-Format only the two application crates to preserve the audited upstream snapshot.
-Lighty's no-tracing build emits some upstream unused-code warnings; the project's
-own Clippy checks deny warnings. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License and attribution
-
-RTMCL's own code is licensed under the [MIT License](LICENSE). The vendored
-Lighty snapshot retains its separate MIT copyright notice; provenance and other
-notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-RTMCL is an independent project, not an official Minecraft product, and is not
-affiliated with or endorsed by Mojang or Microsoft.
+RTMCL is not an official Minecraft product and is not affiliated with or endorsed
+by Mojang or Microsoft.

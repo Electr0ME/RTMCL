@@ -8,6 +8,10 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+dev-local-accounts = []
+
 [dependencies]
 lighty-launcher.workspace = true
 serde_json.workspace = true
@@ -15,6 +19,7 @@ reqwest.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 hex.workspace = true
+md-5.workspace = true
 futures-util.workspace = true
 async-trait.workspace = true
 directories.workspace = true

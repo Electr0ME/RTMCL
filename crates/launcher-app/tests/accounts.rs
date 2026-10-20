@@ -103,3 +103,28 @@ fn future_schema_and_unknown_providers_are_rejected_without_rewriting() {
         unknown
     );
 }
+
+#[tokio::test]
+async fn microsoft_metadata_alone_does_not_unlock_local_accounts() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::discover(Some(temp.path())).unwrap();
+    let owner = AccountId::new();
+    let content = format!("schema_version = 1\n{}", microsoft_entry(owner));
+    write_accounts(&paths, &content);
+    let accounts = Accounts::new(paths.clone());
+    assert!(
+        accounts
+            .add_local(
+                "TestPlayer".into(),
+                Some(owner),
+                launcher_app::tasks::Cancellation::new()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(accounts.list().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(paths.config.join("accounts.toml")).unwrap(),
+        content
+    );
+}

@@ -10,9 +10,10 @@ Copyright (c) 2025 Hamadi. Licensed under the MIT License; the original notice
 is retained at [vendor/lighty/LICENSE](vendor/lighty/LICENSE).
 
 Local modifications are documented in
-[RTMCL-PATCHES.md](vendor/lighty/RTMCL-PATCHES.md). The original release archive
-checksums and source comparison results are recorded in
-[lighty-release-audit.json](docs/lighty-release-audit.json).
+[RTMCL-PATCHES.md](vendor/lighty/RTMCL-PATCHES.md). The original crates.io release
+archives were independently SHA-256 checked and compared with the fixed upstream
+commit before local modifications. Detailed audit records and helper scripts are
+kept in the ignored local development directories.
 
 ## Other dependencies and game content
 
@@ -20,7 +21,7 @@ Cargo dependencies retain their respective licenses. Their exact versions and
 sources are recorded in [Cargo.lock](Cargo.lock).
 
 Minecraft, Java runtimes, and game assets are not distributed with this source
-repository. The game screenshots in `docs/evidence/` document development smoke
-tests; they are not covered by the license for RTMCL's own source code.
+repository. Local development screenshots are excluded from Git and are not
+covered by the license for RTMCL's own source code.
 Minecraft is a trademark of Mojang Studios. RTMCL is an independent project and
 is not affiliated with or endorsed by Mojang or Microsoft.

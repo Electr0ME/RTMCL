@@ -6,6 +6,7 @@ use std::{
 use lighty_launcher::auth::{
     AuthProvider, Authenticator, ExposeSecret, MicrosoftAuth, SecretString, UserProfile,
 };
+use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -20,6 +21,12 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AccountKind {
+    Local {
+        #[serde(default)]
+        owner: Option<AccountId>,
+        #[serde(default)]
+        development_only: bool,
+    },
     Microsoft {
         client_id: String,
         persistence: CredentialPersistence,
@@ -53,6 +60,86 @@ pub struct Accounts {
     paths: AppPaths,
     // Secrets only in memory when system storage is unavailable or explicitly disabled.
     session: Arc<Mutex<HashMap<AccountId, SecretString>>>,
+    gateway: Arc<dyn MicrosoftGateway>,
+}
+
+/// Explicit compile-time exception; never enabled by runtime flags or account metadata.
+pub const DEVELOPMENT_LOCAL_ACCOUNTS: bool = cfg!(feature = "dev-local-accounts");
+
+pub fn local_uuid(username: &str) -> Uuid {
+    let hash: [u8; 16] = Md5::digest(format!("OfflinePlayer:{username}").as_bytes()).into();
+    uuid::Builder::from_md5_bytes(hash).into_uuid()
+}
+
+fn validate_local_name(username: &str) -> Result<()> {
+    if !(3..=16).contains(&username.len())
+        || !username
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return Err(AppError::Account(
+            "本地名称须为 3–16 位 ASCII 字母、数字或下划线".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[async_trait::async_trait]
+trait MicrosoftGateway: Send + Sync {
+    async fn login(
+        &self,
+        client_id: &str,
+        prompt: tokio::sync::mpsc::UnboundedSender<(String, String)>,
+        cancellation: CancellationToken,
+    ) -> Result<UserProfile>;
+    async fn refresh(
+        &self,
+        client_id: &str,
+        token: &SecretString,
+        cancellation: CancellationToken,
+    ) -> Result<UserProfile>;
+}
+
+struct OnlineMicrosoft;
+
+#[async_trait::async_trait]
+impl MicrosoftGateway for OnlineMicrosoft {
+    async fn login(
+        &self,
+        client_id: &str,
+        prompt: tokio::sync::mpsc::UnboundedSender<(String, String)>,
+        cancellation: CancellationToken,
+    ) -> Result<UserProfile> {
+        let mut auth = MicrosoftAuth::new(client_id.to_owned());
+        auth.set_device_code_callback(move |code, url| {
+            let _ = prompt.send((code.to_owned(), url.to_owned()));
+        });
+        let events = lighty_launcher::event::EventBus::new(32);
+        let mut receiver = events.subscribe();
+        let profile = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AppError::Cancelled),
+            result = auth.authenticate(Some(&events)) => result.map_err(|error| auth_error(error, &mut receiver))?,
+        };
+        crate::ownership::verify(&profile, cancellation).await?;
+        Ok(profile)
+    }
+
+    async fn refresh(
+        &self,
+        client_id: &str,
+        token: &SecretString,
+        cancellation: CancellationToken,
+    ) -> Result<UserProfile> {
+        let mut auth = MicrosoftAuth::new(client_id.to_owned());
+        let events = lighty_launcher::event::EventBus::new(32);
+        let mut receiver = events.subscribe();
+        let profile = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AppError::Cancelled),
+            result = auth.authenticate_with_refresh_token(token, Some(&events)) => result.map_err(|error| auth_error(error, &mut receiver))?,
+        };
+        crate::ownership::verify(&profile, cancellation).await?;
+        Ok(profile)
+    }
 }
 
 impl Accounts {
@@ -60,6 +147,7 @@ impl Accounts {
         Self {
             paths,
             session: Arc::default(),
+            gateway: Arc::new(OnlineMicrosoft),
         }
     }
 
@@ -70,14 +158,21 @@ impl Accounts {
                 check_schema(file.schema_version)?;
                 file.accounts
                     .into_iter()
-                    // Ignore records from the removed test mode. They cannot be selected
-                    // or authenticated, and reading never rewrites the old file.
+                    // Legacy unbound test records are not proof of ownership. New
+                    // development records must explicitly carry development_only=true.
                     .filter(|record| {
                         record
                             .get("provider")
                             .and_then(|provider| provider.get("kind"))
                             .and_then(toml::Value::as_str)
                             != Some("local")
+                            || record.get("provider").is_some_and(|provider| {
+                                provider.get("owner").is_some()
+                                    || provider
+                                        .get("development_only")
+                                        .and_then(toml::Value::as_bool)
+                                        == Some(true)
+                            })
                     })
                     .map(|record| Ok(record.try_into::<AccountRecord>()?))
                     .collect()
@@ -93,6 +188,15 @@ impl Accounts {
         self.paths.ensure()?;
         let _lock = FileLock::acquire(&self.paths.config.join("accounts.lock"))?;
         let mut accounts = self.list()?;
+        if let AccountKind::Local {
+            owner: Some(owner), ..
+        } = record.provider
+            && !accounts.iter().any(|account| {
+                account.id == owner && matches!(account.provider, AccountKind::Microsoft { .. })
+            })
+        {
+            return Err(AppError::Account("绑定的正版账户已被移除".into()));
+        }
         accounts.retain(|account| account.id != record.id);
         accounts.push(record);
         write_toml(
@@ -111,6 +215,68 @@ impl Accounts {
             .ok_or_else(|| AppError::Account(format!("账户不存在: {id}")))
     }
 
+    pub async fn add_local(
+        &self,
+        username: String,
+        owner: Option<AccountId>,
+        cancellation: CancellationToken,
+    ) -> Result<AccountRecord> {
+        validate_local_name(&username)?;
+        if cancellation.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+        let development_only = DEVELOPMENT_LOCAL_ACCOUNTS && owner.is_none();
+        let owner = if development_only {
+            None
+        } else {
+            let candidates = self.list()?.into_iter().filter(|record| {
+                matches!(record.provider, AccountKind::Microsoft { .. })
+                    && owner.is_none_or(|id| id == record.id)
+            });
+            let mut verified = None;
+            let mut failure = AppError::Account(
+                "请先登录拥有 Minecraft Java 版的微软账户，再创建本地账户".into(),
+            );
+            for candidate in candidates {
+                match self
+                    .authenticate_microsoft(&candidate, cancellation.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        verified = Some(candidate.id);
+                        break;
+                    }
+                    Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                    Err(error) => failure = error,
+                }
+            }
+            Some(verified.ok_or(failure)?)
+        };
+        if cancellation.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+        let uuid = local_uuid(&username).simple().to_string();
+        let existing = self.list()?.into_iter().find(|record| {
+            record.minecraft_uuid == uuid
+                && record.provider
+                    == (AccountKind::Local {
+                        owner,
+                        development_only,
+                    })
+        });
+        let record = existing.unwrap_or(AccountRecord {
+            id: AccountId::new(),
+            username,
+            minecraft_uuid: uuid,
+            provider: AccountKind::Local {
+                owner,
+                development_only,
+            },
+        });
+        self.save_record(record.clone())?;
+        Ok(record)
+    }
+
     pub async fn login_microsoft(
         &self,
         client_id: String,
@@ -123,16 +289,7 @@ impl Accounts {
                 "请提供本项目注册的 Microsoft 应用 Client ID（UUID）".into(),
             ));
         }
-        let mut auth = MicrosoftAuth::new(client_id.clone());
-        auth.set_device_code_callback(move |code, url| {
-            let _ = prompt.send((code.to_owned(), url.to_owned()));
-        });
-        let events = lighty_launcher::event::EventBus::new(32);
-        let mut receiver = events.subscribe();
-        let profile = tokio::select! {
-            _ = cancellation.cancelled() => return Err(AppError::Cancelled),
-            result = auth.authenticate(Some(&events)) => result.map_err(|error| auth_error(error, &mut receiver))?,
-        };
+        let profile = self.gateway.login(&client_id, prompt, cancellation).await?;
         self.persist_profile(profile, client_id, session_only).await
     }
 
@@ -144,10 +301,10 @@ impl Accounts {
     ) -> Result<AccountRecord> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
-            let existing = this
-                .list()?
-                .into_iter()
-                .find(|account| account.minecraft_uuid == profile.uuid);
+            let existing = this.list()?.into_iter().find(|account| {
+                matches!(account.provider, AccountKind::Microsoft { .. })
+                    && account.minecraft_uuid == profile.uuid
+            });
             let prior_system_credential = existing.as_ref().is_some_and(|account| {
                 matches!(
                     account.provider,
@@ -205,11 +362,51 @@ impl Accounts {
         record: &AccountRecord,
         cancellation: CancellationToken,
     ) -> Result<UserProfile> {
+        if let AccountKind::Local {
+            owner,
+            development_only,
+        } = &record.provider
+        {
+            validate_local_name(&record.username)?;
+            if cancellation.is_cancelled() {
+                return Err(AppError::Cancelled);
+            }
+            if record.minecraft_uuid != local_uuid(&record.username).simple().to_string() {
+                return Err(AppError::Account("本地账户 UUID 与名称不一致".into()));
+            }
+            if *development_only {
+                if !DEVELOPMENT_LOCAL_ACCOUNTS {
+                    return Err(AppError::Account(
+                        "开发测试账户仅能用于显式开发构建；请绑定并验证正版账户".into(),
+                    ));
+                }
+            } else {
+                let owner =
+                    owner.ok_or_else(|| AppError::Account("本地账户尚未绑定正版账户".into()))?;
+                self.authenticate_microsoft(&self.get(owner)?, cancellation)
+                    .await?;
+            }
+            return Ok(UserProfile::offline(
+                record.username.clone(),
+                record.minecraft_uuid.clone(),
+            ));
+        }
+        self.authenticate_microsoft(record, cancellation).await
+    }
+
+    async fn authenticate_microsoft(
+        &self,
+        record: &AccountRecord,
+        cancellation: CancellationToken,
+    ) -> Result<UserProfile> {
         let AccountKind::Microsoft {
             client_id,
             persistence,
             ..
-        } = &record.provider;
+        } = &record.provider
+        else {
+            return Err(AppError::Account("绑定账户必须是已验证的微软账户".into()));
+        };
         let this = self.clone();
         let id = record.id;
         let session_only = *persistence == CredentialPersistence::SessionOnly;
@@ -229,13 +426,15 @@ impl Accounts {
         })
         .await
         .map_err(|_| AppError::Account("读取凭据任务失败".into()))??;
-        let mut auth = MicrosoftAuth::new(client_id.clone());
-        let events = lighty_launcher::event::EventBus::new(32);
-        let mut receiver = events.subscribe();
-        let profile = tokio::select! {
-            _ = cancellation.cancelled() => return Err(AppError::Cancelled),
-            result = auth.authenticate_with_refresh_token(&token, Some(&events)) => result.map_err(|error| auth_error(error, &mut receiver))?,
-        };
+        let profile = self
+            .gateway
+            .refresh(client_id, &token, cancellation)
+            .await?;
+        if Uuid::parse_str(&profile.uuid).ok() != Uuid::parse_str(&record.minecraft_uuid).ok()
+            || Uuid::parse_str(&profile.uuid).is_err()
+        {
+            return Err(AppError::Account("正版账户身份已变化，请重新登录".into()));
+        }
         // Rotate the refresh token before allowing this authentication to succeed.
         self.persist_profile(
             profile.clone(),
@@ -359,6 +558,192 @@ fn auth_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockMicrosoft {
+        eligible: std::sync::atomic::AtomicBool,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl MicrosoftGateway for MockMicrosoft {
+        async fn login(
+            &self,
+            _: &str,
+            _: tokio::sync::mpsc::UnboundedSender<(String, String)>,
+            _: CancellationToken,
+        ) -> Result<UserProfile> {
+            self.refresh(
+                "",
+                &SecretString::from("synthetic"),
+                CancellationToken::new(),
+            )
+            .await
+        }
+        async fn refresh(
+            &self,
+            _: &str,
+            _: &SecretString,
+            _: CancellationToken,
+        ) -> Result<UserProfile> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.eligible.load(Ordering::SeqCst) {
+                return Err(AppError::Account("合成账户授权已失效".into()));
+            }
+            Ok(profile("synthetic-rotated-refresh"))
+        }
+    }
+
+    #[tokio::test]
+    async fn bound_local_creation_and_each_launch_revalidate_owner_and_logout_revokes_access() {
+        use std::sync::atomic::Ordering;
+        let temp = tempfile::tempdir().unwrap();
+        let mut accounts = Accounts::new(AppPaths::discover(Some(temp.path())).unwrap());
+        let gateway = Arc::new(MockMicrosoft {
+            eligible: true.into(),
+            calls: 0.into(),
+        });
+        accounts.gateway = gateway.clone();
+        let owner = accounts
+            .persist_profile(profile("synthetic-refresh"), "test-client".into(), true)
+            .await
+            .unwrap();
+        let local = accounts
+            .add_local(
+                "Test_Player".into(),
+                Some(owner.id),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            local.provider,
+            AccountKind::Local {
+                owner: Some(owner.id),
+                development_only: false
+            }
+        );
+        assert_eq!(gateway.calls.load(Ordering::SeqCst), 1);
+        let local_profile = accounts
+            .authenticate(&local, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            local_profile.uuid,
+            local_uuid("Test_Player").simple().to_string()
+        );
+        assert!(matches!(local_profile.provider, AuthProvider::Offline));
+        assert_eq!(gateway.calls.load(Ordering::SeqCst), 2);
+        gateway.eligible.store(false, Ordering::SeqCst);
+        assert!(
+            accounts
+                .authenticate(&local, CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert!(
+            accounts
+                .add_local(
+                    "DeniedPlayer".into(),
+                    Some(owner.id),
+                    CancellationToken::new()
+                )
+                .await
+                .is_err()
+        );
+        gateway.eligible.store(true, Ordering::SeqCst);
+        accounts.remove(owner.id).unwrap();
+        assert!(
+            accounts
+                .authenticate(&local, CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert!(
+            accounts
+                .add_local(
+                    "DeniedPlayer".into(),
+                    Some(local.id),
+                    CancellationToken::new()
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn development_exception_is_compile_time_only_and_never_a_persisted_unlock() {
+        let temp = tempfile::tempdir().unwrap();
+        let accounts = Accounts::new(AppPaths::discover(Some(temp.path())).unwrap());
+        let result = accounts
+            .add_local("DevPlayer".into(), None, CancellationToken::new())
+            .await;
+        assert_eq!(result.is_ok(), DEVELOPMENT_LOCAL_ACCOUNTS);
+        let record = AccountRecord {
+            id: AccountId::new(),
+            username: "DevPlayer".into(),
+            minecraft_uuid: local_uuid("DevPlayer").simple().to_string(),
+            provider: AccountKind::Local {
+                owner: None,
+                development_only: true,
+            },
+        };
+        assert_eq!(
+            accounts
+                .authenticate(&record, CancellationToken::new())
+                .await
+                .is_ok(),
+            DEVELOPMENT_LOCAL_ACCOUNTS
+        );
+        let mut legacy = record.clone();
+        legacy.provider = AccountKind::Local {
+            owner: None,
+            development_only: false,
+        };
+        assert!(
+            accounts
+                .authenticate(&legacy, CancellationToken::new())
+                .await
+                .is_err()
+        );
+        let mut invalid_uuid = record;
+        invalid_uuid.minecraft_uuid = "00000000000000000000000000000001".into();
+        assert!(
+            accounts
+                .authenticate(&invalid_uuid, CancellationToken::new())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_name_and_cancelled_creation_never_write_account_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::discover(Some(&temp.path().join("absent"))).unwrap();
+        let accounts = Accounts::new(paths.clone());
+        for name in ["ab", "Bad Name", "玩家测试", "too_long_username_1234"] {
+            assert!(
+                accounts
+                    .add_local(name.into(), None, CancellationToken::new())
+                    .await
+                    .is_err()
+            );
+        }
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            accounts
+                .add_local("DevPlayer".into(), None, cancellation)
+                .await,
+            Err(AppError::Cancelled)
+        ));
+        assert!(!paths.config.exists());
+        assert_eq!(
+            local_uuid("Notch").to_string(),
+            "b50ad385-829d-3141-a216-7e7d7539ba7f"
+        );
+        assert_ne!(local_uuid("Notch"), local_uuid("notch"));
+    }
 
     #[test]
     fn auth_diagnostics_keep_stage_but_never_echo_secrets() {

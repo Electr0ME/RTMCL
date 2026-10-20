@@ -50,9 +50,9 @@ impl CoreAdapter for LightyAdapter {
         if instance.install_state != crate::domain::InstallState::Ready {
             return Err(AppError::Core("实例尚未完成安装".into()));
         }
-        let account = instance.preferred_account.ok_or_else(|| {
-            AppError::Account("实例尚未选择微软账户；P0 CLI 请使用 --account".into())
-        })?;
+        let account = instance
+            .preferred_account
+            .ok_or_else(|| AppError::Account("实例尚未选择账户；P0 CLI 请使用 --account".into()))?;
         let network = Network::new(
             self.service.paths().clone(),
             self.service.settings()?,

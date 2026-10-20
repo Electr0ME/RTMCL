@@ -7,8 +7,8 @@ fixed snapshot; no upstream PR or remote fork has been published.
 
 All nine crates.io archives were independently SHA-256 checked and their src/
 files and Cargo.toml.orig compared with this commit before local modifications.
-Evidence: [release audit](../../docs/lighty-release-audit.json); audit script:
-[audit-lighty.ps1](../../scripts/audit-lighty.ps1). The event crate does not publish
+Detailed audit records and helper scripts are kept locally and excluded from Git.
+The event crate does not publish
 a rust_version field; the integrated workspace requires Rust 1.98.
 
 | File | Local change |
@@ -31,8 +31,8 @@ RTMCL reuses loader normalization and structured arguments. It owns download
 execution, Java selection and process supervision, avoiding high-level run().
 No BMCLAPI constants, mirror policy or RTMCL dependency is added to Lighty.
 
-The former RTMCL local test login has been removed. RTMCL no longer constructs
-offline profiles or invokes the upstream offline provider. Generic providers in
-the audited upstream snapshot are retained for provenance; they are not exposed
-by the application login/launch path. No-tracing builds emit upstream unused/dead-code warnings; project
+RTMCL constructs local profiles only after its own bound-account ownership gate,
+or with the explicit debug-only development exception. These policies live in
+launcher-app; the generic upstream profile constructor is unchanged. See the
+[account policy](../../README.md#accounts). No-tracing builds emit upstream unused/dead-code warnings; project
 Clippy uses --no-deps and denies warnings in the RTMCL crates.

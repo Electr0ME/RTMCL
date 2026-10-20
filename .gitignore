@@ -1,5 +1,7 @@
 /target/
 /.rtmcl/
+/docs/
+/scripts/
 *.log
 
 # Local credentials and machine-specific settings.

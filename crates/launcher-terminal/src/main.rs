@@ -25,6 +25,11 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if launcher_app::accounts::DEVELOPMENT_LOCAL_ACCOUNTS
+        && !matches!(&cli.command, Some(Command::Supervise))
+    {
+        eprintln!("开发构建：未绑定的本地账户仅用于本机测试；此构建不得作为发行版本。");
+    }
     let paths = AppPaths::discover(cli.data_dir.as_deref())?;
     let service = LauncherService::new(paths.clone());
     match cli.command.unwrap_or(Command::Tui) {
@@ -44,7 +49,11 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error + Send + Sync>> {
             println!(
                 "P0 CLI: 版本查询、安装、Java、账户与监督进程；正版登录 Windows 联调中，WSL 验收暂缓"
             );
-            println!("验证清单: docs/p0-validation.zh-CN.md");
+            println!("项目状态与使用说明: README.zh-CN.md");
+            println!(
+                "本地账户开发例外: {}",
+                launcher_app::accounts::DEVELOPMENT_LOCAL_ACCOUNTS
+            );
         }
         Command::Paths => {
             println!("config    {}", paths.config.display());
@@ -66,6 +75,23 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error + Send + Sync>> {
             println!("配置文件: {}", paths.settings_file().display());
         }
         Command::Instance { command } => match command {
+            InstanceCommand::Logs { instance, lines } => {
+                let log = tokio::task::spawn_blocking(move || {
+                    service.game_log_tail(instance, lines as usize)
+                })
+                .await??;
+                eprintln!("游戏日志: {}", log.path.display());
+                if log.byte_limit_reached {
+                    eprintln!("日志片段已限制为末尾 1 MiB，可能不足请求的行数。");
+                }
+                // Game/mod output is untrusted terminal text. Keep line layout, strip controls.
+                let text: String = log
+                    .text
+                    .chars()
+                    .filter(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+                    .collect();
+                print!("{text}");
+            }
             InstanceCommand::List => {
                 let instances =
                     tokio::task::spawn_blocking(move || service.list_instances()).await??;

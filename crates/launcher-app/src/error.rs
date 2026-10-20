@@ -35,7 +35,7 @@ pub enum AppError {
     MissingDataDirectory,
     #[error("任务状态转换无效: {0}")]
     InvalidTaskTransition(String),
-    #[error("{operation} 尚未接入 Lighty；请先完成 docs/p0-validation.zh-CN.md 中的验证")]
+    #[error("{operation} 尚未接入 Lighty；项目状态见 README.zh-CN.md")]
     CoreUnavailable { operation: &'static str },
 }
 

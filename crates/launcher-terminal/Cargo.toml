@@ -8,6 +8,10 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+dev-local-accounts = ["launcher-app/dev-local-accounts"]
+
 [[bin]]
 name = "rtmcl"
 path = "src/main.rs"

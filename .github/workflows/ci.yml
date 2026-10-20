@@ -10,12 +10,30 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
+        mode: [normal, development]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
       - run: cargo fmt --package launcher-app --package launcher-terminal -- --check
-      - run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
-      - run: cargo test --workspace --locked
-      - run: cargo build --workspace --locked
+      - run: cargo clippy --workspace --all-targets --no-deps --locked ${{ matrix.mode == 'development' && '--features dev-local-accounts' || '' }} -- -D warnings
+      - run: cargo test --workspace --locked ${{ matrix.mode == 'development' && '--features dev-local-accounts' || '' }}
+      - run: cargo build --workspace --locked ${{ matrix.mode == 'development' && '--features dev-local-accounts' || '' }}
+      - name: Verify release rejects development exception
+        if: matrix.mode == 'normal'
+        shell: bash
+        run: |
+          set +e
+          cargo check --package launcher-app --release --features dev-local-accounts --locked > release-guard-output.log 2>&1
+          guard_status=$?
+          set -e
+          if [ "$guard_status" -eq 0 ]; then
+            echo "Release unexpectedly accepted dev-local-accounts."
+            exit 1
+          fi
+          if ! grep -Fq "dev-local-accounts is for explicit debug development builds only" release-guard-output.log; then
+            cat release-guard-output.log
+            exit 1
+          fi
+          echo "PASS: release builds reject the development account exception."

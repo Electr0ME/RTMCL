@@ -19,7 +19,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// 微软 Device Code 登录与账户管理
+    /// 微软 Device Code 登录、本地账户与账户管理
     Account {
         #[command(subcommand)]
         command: AccountCommand,
@@ -43,7 +43,7 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// 管理本地实例配置；尚不下载或安装游戏
+    /// 管理实例配置及查看游戏日志
     Instance {
         #[command(subcommand)]
         command: InstanceCommand,
@@ -62,6 +62,13 @@ pub enum SourceChoice {
 
 #[derive(Debug, Subcommand)]
 pub enum AccountCommand {
+    /// 创建本地账户；默认验证正版账户，开发构建可无绑定测试
+    AddLocal {
+        username: String,
+        /// 绑定的微软账户；省略时选择可验证的正版账户
+        #[arg(long)]
+        owner: Option<AccountId>,
+    },
     List,
     /// 登录微软账户；系统凭据不可用时明确使用本次会话
     Login {
@@ -77,7 +84,7 @@ pub enum AccountCommand {
         #[arg(long, requires = "launch")]
         wait: bool,
     },
-    /// 清理本地账户资料和系统刷新令牌
+    /// 清理账户资料和系统刷新令牌
     Logout {
         account: AccountId,
     },
@@ -123,6 +130,12 @@ pub enum ConfigCommand {
 pub enum InstanceCommand {
     List,
     Create(CreateInstance),
+    /// 显示该实例最近更新的游戏日志末尾；运行中的游戏不受影响
+    Logs {
+        instance: InstanceId,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=10_000))]
+        lines: u32,
+    },
 }
 
 #[derive(Debug, Args)]

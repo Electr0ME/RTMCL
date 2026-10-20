@@ -17,6 +17,21 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 pub async fn accounts(service: LauncherService, command: AccountCommand) -> Result<()> {
     let accounts = Accounts::new(service.paths().clone());
     match command {
+        AccountCommand::AddLocal { username, owner } => {
+            let cancellation = tokio_util_token();
+            let future = accounts.add_local(username, owner, cancellation.clone());
+            tokio::pin!(future);
+            let record = loop {
+                tokio::select! {
+                    result = &mut future => break result?,
+                    signal = tokio::signal::ctrl_c() => { signal?; cancellation.cancel(); }
+                }
+            };
+            println!(
+                "{}  {}  {:?}  UUID={}",
+                record.id, record.username, record.provider, record.minecraft_uuid
+            );
+        }
         AccountCommand::List => {
             for record in tokio::task::spawn_blocking(move || accounts.list()).await?? {
                 println!(
